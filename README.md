@@ -1,0 +1,237 @@
+# 手写的Spring框架
+
+## 1.IOC容器
+
+### 1.从Bean的生命周期来讲
+
+#### 1.加载XML或扫描Class文件
+
+​		资源加载器属于相对独立的部分，它位于Spring框架核心包下的IO实现内容，主要用于处理Class、本地和云环境中的文件信息，资源加载、解析后的注册操作会把Bean定义信息放入到DefaultListableBeanFactory。
+
+​		为了把Bean的定义、注册和初始化交给Spring.xml配置化处理，那么就需要实现两大块内容，分别是：资源加载器、XML资源处理类，实现过程主要以对接口Resource、ResourceLoader的实现，而另外BeanDefinitionReader接口则是对资源的具体使用，将配置信息注册到Spring容器中去。
+
+​		在Resource的资源加载器的实现中包括了，ClassPath、系统文件、云配置文件，最终在DefaultResourceLoader中做具体的调用。
+
+​		接口：BeanDefinitionReader、抽象类：AbstractBeanDefinitionReader、实现类： XmlBeanDefinitionReader，这三部分内容主要是合理清晰的处理了资源读取后的注册Bean的操作。接口管定义，抽象类处理不是业务的、工具性质的方法的实现（getRegistry、getResourceLoader），这样不会污染接口，而且最终实现类即可只关心具体的业务实现。
+
+​		首先需要定义BeanFactory接口，提供获取Bean的方法getBean，分为无构造函数入参、有构造函数入参和按照类型获取Bean的方法，三种。BeanFactory接口的扩展接口有ListableBeanFactory、HierarchicalBeanFactory、AutowireCapableBeanFactory。
+
+​		资源加载接口的创建和实现，创建core.io包，主要用于处理资源加载流，定义Resource接口，提供获取InputStream流的方法，接下来再分别实现三种不同的流文件操作：ClassPath、FileSystem、URL。
+
+- 对于ClassPath类的实现主要是通过ClassLoader读取ClassPath下的文件信息，具体的读取过程主要是classLoader.getResourceAsStream(path)。
+- 对于FileSystem类的实现主要是通过指定文件路径的方式读取文件信息。
+- 对于URL类的实现主要是通过HTTP的方式读取云服务的文件，可以把配置文件放到GitHub上。
+
+​		包装资源加载器，按照资源加载的不同方式，资源加载器可以把这些方式集中到统一的类服务下进行处理，外部用户只需要传递资源地址即可，简化使用。定义接口ResourceLoader，定义获取资源方法，入参传递location地址即可。类DefaultResourceLoader实现接口ResourceLoader，判断是ClassPath、FileSystem和URL的哪一种，并采取对应处理。
+
+​		BeanDefinitionReader接口定义了几个方法，包括getRegistry、getResourceLoader和三个加载bean定义的方法。
+
+​		AbstractBeanDefinitionReader实现接口BeanDefinitionReader，实现了getRegistry、getResourceLoader方法，提供了构造函数。
+
+​		XmlBeanDefinitionReader继承抽象类AbstractBeanDefinitionReader，把解析后的XML文件中的Bean信息，注册到Spring
+
+容器中去。loadBeanDefinitions方法处理资源加载，内部方法doLoadBeanDefinitions中主要是对xml的读取XmlUtil.readXML(inputStream)和元素Element解析。在解析过程中，通过循环操作，以此获取Bean配置以及配置中的id、name、class、value、ref信息。最终把读取出来的配置信息，创建成BeanDefinition以及PropertyValue，最终把完整的Bean定义内容注册到Bean容器。
+
+#### 2.注册BeanDefinition到BeanFactory的BeanDefinitionRegistry
+
+​		整个过程相当于把书（BeanDefinition）放入图书馆（BeanFactory）的书架（BeanDefinitionRegistry），借书还书是跟图书馆打交道，但是书还是放在了书架上。每一个受管的对象，在容器中都会有一个BeanDefinition的实例与之对应，该实例负责保存对象所有必要的信息，包括对象的class类型、是否是抽象类、构造方法参数以及其他属性等。当客户端向BeanFactory请求相应的对象时，BeanFactory会根据这些信息为客户端返回一个完备可用的对象实例。
+
+​		创建一个Bean容器，可以定义、注册和获取Bean对象。在SpringBean容器场景下，我们需要一种可以用于存放名称索引式的数据结构，所以选择ConcurrentHashMap是最合适的。定义就是BeanDefinition类，记录着对象信息，注册就是在BeanFactory类的Map中存放定义了的Bean的对象信息。获取就是获取对象，Bean的名字就是Key，Spring容器初始化好Bean以后，就可以直接获取了。
+
+​		BeanFactory接口，提供获取Bean的方法getBean，分为无构造函数入参、有构造函数入参和按照类型获取Bean的方法，三种。	
+
+​		抽象类AbstractBeanFactory实现BeanFactory接口。（这样使用模板模式的设计方式，可以统一收口通用核心方法的调用逻辑和标准定义，也就很好的控制了后续的实现者不用关心调用逻辑，按照统一方式执行。那么类的继承者只需要关心具体方法的逻辑实现即可）getBean方法里首先调用getSingleton在内存中得到bean，如果bean存在则返回单例bean，否则通过createBean方法创建bean并返回。
+
+​		那么在继承抽象类AbstractBeanFactory后的AbstractAutowireCapableBeanFactory就可以实现属于自己的抽象方法createBean了，其他的抽象方法由其他继承类实现。只关心属于自己的方法，不是自己的方法不参与。
+
+​		对于单例接口SingletonBeanRegistry由DefaultSingletonBeanRegistry实现，DefaultSingletonBeanRegistry被抽象类AbstractBeanFactory继承，AbstractBeanFactory就具备了使用单例注册类的能力。
+
+​		核心实现类DefaultListableBeanFactory继承抽象类AbstractAutowireCapableBeanFactory实现接口BeanDefinitionRegistry，注册和获取BeanDefinition都可以在Map里存取了。
+
+#### 3.BeanFactoryPostProcessor修改BeanDefinition
+
+​	  	定义接口BeanFactoryPostProcessor，在所有的BeanDefinition加载完成后，实例化对象之前，提供修改BeanDefinition属性的机制。常用的有PropertyPlaceholderConfigurer和PropertyOverrideConfigurer类。
+
+​		和7.BeanPostProcessor前置处理一起说了，都属于扩展机制。
+
+#### 4.实例化Bean对象
+
+​		容器拥有所有对象的BeanDefinition来保存实例化阶段的必要信息，只有通过getBean方法来请求某个对象的时候，才有可能触发Bean的实例化。之所以说有可能，是因为只有当Bean定义的getBean方法第一次被调用时才会调用createBean()方法来进行实例化，第二次调用则会直接返回容器缓存的第一次实例化完的对象实例（prototype类型的bean每次请求都进行实例化，此类型除外）。 
+
+​		BeanFactory的getBean方法可以被客户端对象显式调用，也可以在容器内部隐式调用，隐式调用的情况有以下两种：
+
+- 对于BeanFactory来说，对象实例化默认采用延迟初始化，当对象A实例化的时候先实例化A依赖的且没有被实例化的对象的getBean方法。
+- 对于ApplicationContext来说，启动后会实例化所有的BeanDefinition，调用注册到该容器的所有BeanDefinition的实例化方法getBean。
+
+​		Spring容器将对其所管理的对象全部给予统一的生命周期管理。
+
+​		在容器内部采用“策略模式”来决定采用何种方式初始化Bean实例。通常可以通过反射或者CGLIB动态字节码生成来初始化相应的bean实例或者动态生成其子类。
+
+​		定义一个实例化策略接口InstantiationStrategy，在实例化接口instantiate方法中添加必要的入参信息，包括：beanDefinition (BeanDefinition)、beanName (String)、ctor (Constructor)、args (Object[])。其中ctor是java.lang.reflect.Constructor类的参数，由AbstractBeanFactory的getBean方法传入，包含了一些必要的类信息，这个参数的目的是拿到符合入参信息相对应的构造函数。
+
+​		JDK实例化：SimpleInstantiationStrategy类实现InstantiationStrategy接口，是它的直接子类，首先通过beanDefinition获取Class信息得到Class类实例clazz，这个Class信息是在Bean定义的时候传递进去的。接下来判断ctor是否为空，如果为空则是无构造函数实例化，直接通过clazz.getDeclaredConstructor().newInstance()完成实例化，否则，通过clazz.getDeclaredConstructor(ctor.getParameterTypes()). newInstance(args)完成实例化。通过反射来实例化对象，但不支持方法注入方式的对象实例化。
+
+​		Cglib实例化：CglibSubclassingInstantiationStrategy继承了SimpleInstantiationStrategy的以反射的方式实例化对象的功能，并且通过CGLIB的动态字节码生成功能，该策略的实现类可以动态生成某个类的子类，进而满足了方法注入所需的对象实例化需求，默认情况下容器内部采用的是CglibSubclassingInstantiationStrategy。
+
+​		策略调用：AbstractAutowireCapableBeanFactory类中实例化策略属性值采用CGLIB，实现createBean方法实例化对象，其中调用createBeanInstance方法创建bean，并将其加入到容器中。createBeanInstance方法中，循环比对出和入参信息匹配的构造函数。最后调用CGLIB实例化策略对象的instantiate方法创建bean。
+
+#### 5.设置对象属性
+
+​		鉴于属性填充是在Bean使用CGLIB创建后补全属性信息，那么就可以在AbstractAutowireCapableBeanFactory类的createBean方法中添加补全属性方法applyPropertyValues()。对于每一个属性值，如果是引用类型，需要递归获取Bean实例，调用getBean得到属性，再通过BeanUtil.setFieldValue进行填充，如果是基础类型，则直接进行填充。
+
+​		这里没有处理循环依赖的问题，后续补充。
+
+#### 6.检查Aware相关接口，设置相关依赖
+
+​		如果想对Spring提供的BeanFactory、ApplicationContext、BeanClassLoader做一些扩展，就需要Spring提供一种能感知容器操作的接口，实现它就能获取接口入参中的各类能力。
+
+​		定义Aware接口，起到标记作用，方便统一摘取出属于此类接口的实现类，通常和instance of一起使用，继承Aware的接口包括BeanFactoryAware、BeanClassLoaderAware、BeanNameAware和ApplicationContextAware等，实现这些接口既能感知所属的BeanFactory、ClassLoader、BeanName、ApplicationContext。
+
+​		ApplicationContextAwareProcessor类，包装处理器，给实现ApplicationContextAware接口的bean对象设置applicationContext。
+
+​		在AbstractApplicationContext类对象refresh()操作时，向beanFactory容器中添加包装处理器ApplicationContextAwareProcessor，包装处理器实现了BeanPostProcessor接口，是作为一个BeanPostProcessor放入beanFactory容器中的。让实现ApplicationContextAware的 bean 对象都能感知所属的 ApplicationContext，最终作为一个BeanPostProcessor在createBean方法内的applyBeanPostProcessorsBeforeInitialization方法进行调用。
+
+​		在AbstractAutowireCapableBeanFactory类中，initializeBean中，通过判断bean instanceof Aware，调用了三个接口方法BeanFactoryAware.setBeanFactory()、BeanClassLoaderAware.setBeanClassLoader()和BeanNameAware.setBeanName()，这样就能通知了已经实现此接口的类。
+
+​		哪个对象实现了接口，就把接口对应的属性设置到哪个对象中。
+
+#### 7.BeanPostProcessor前置处理
+
+​		定义接口BeanPostProcessor，里边有两个方法，postProcessBeforeInitialization代表在对象实例化之前执行此方法，postProcessAfterInitialization代表在对象实例化之后执行此方法。
+
+​		 想要在Bean初始化过程中完成对Bean对象的扩展，有两个接口BeanFactoryPostProcessor和BeanPostProcessor，如果只是添加这两个接口，不做任何包装，那么对于使用者来说还是非常麻烦的，我们希望能开发一个Spring的上下文操作类，把相应的Xml加载、注册、实例化以及新增的修改和扩展都融合进去，让Spring可以自动地扫描到我们新增的服务，便于用户使用。
+
+​		应用上下文：新建一个context包，是实现应用上下文功能的包，定义接口ApplicationContext接口，它继承了ListableBeanFactory接口，也就继承了BeanFactory，有了BeanFactory的方法。扩展出一系列抽象实现类并最终完成ClassPathXmlApplicationContext类的实现，这个类就是最后交给用户使用的类。
+
+​		ConfigurableApplicationContext继承自ApplicationContext并提供了refresh方法。
+
+​		AbstractApplicationContext继承DefaultResourceLoader类是为了处理spring.xml配置资源的加载，实现了ConfigurableApplicationContext接口，refresh方法的实现包括：
+
+1. 创建 BeanFactory，并加载 BeanDefinition
+2. 获取 BeanFactory
+3. 添加 ApplicationContextAwareProcessor，让实现ApplicationContextAware接口的 Bean 对象都能感知所属的 ApplicationContext
+4. 在 Bean 实例化之前，执行 BeanFactoryPostProcessor (Invoke factory processors registered as beans in the context.)
+5. BeanPostProcessor 需要提前于其他 Bean 对象实例化之前执行注册操作
+6. 初始化事件发布者（容器事件和事件监听器模块用）
+7. 注册事件监听器（容器事件和事件监听器模块用）
+8. 提前实例化单例Bean对象
+9. 发布容器刷新完成事件（容器事件和事件监听器模块用）
+
+​		AbstractRefreshableApplicationContext继承了AbstractApplicationContext，在refreshBeanFactory()中主要是获取了DefaultListableBeanFactory的实例化以及对资源配置的加载操作loadBeanDefinitions，在加载完成后即可完成对spring.xml配置文件中Bean对象的定义和注册，同时也包括实现接口BeanFactoryPostProcessor和BeanPostProcessor的配置Bean信息。
+
+​		AbstractXmlApplicationContext继承自AbstractRefreshableApplicationContext，在loadBeanDefinitions方法实现中使用XmlBeanDefinitionReader类处理XML文件配置信息。同时又留下了一个抽象方法getConfigLocations，目的是从入口上下文类，拿到配置信息的地址描述。
+
+​		ClassPathXmlApplicationContext类继承自AbstractXmlApplicationContext，是具体对外给用户提供的应用上下文方法，主要是对继承的抽象类中方法的调用和提供配置文件地址信息。
+
+​		在AbstractAutowireCapableBeanFactory的createBean方法的填充属性后边，执行 Bean 的初始化方法和 BeanPostProcessor 的前置和后置处理方法。
+
+​		后续开发者自己写的扩展类中实现BeanPostProcessor接口后，会涉及到两个接口方法postProcessBeforeInitialization、postProcessAfterInitialization分别执行Bean对象执行初始化前后的扩展操作。
+
+#### 8.初始化
+
+​		InitializingBean、DisposableBean两个接口分别定义初始化和销毁操作。
+
+​		在抽象类AbstractAutowireCapableBeanFactory中的invokeInitMethods中，主要分为两块来执行：
+
+- 实现了InitializingBean接口的，通过Bean调用接口定义的方法((InitializingBean)bean).afterPropertiesSet()。
+- 判断配置信息init-method是否存在，若存在则，执行反射调用initMethod.invoke(bean)。
+
+#### 9.BeanPostProcessor后置处理
+
+和7.BeanPostProcessor前置处理一起说了，都属于扩展机制。
+
+#### 10.使用Bean对象
+
+#### 11.销毁对象（虚拟机钩子没懂）
+
+​		配置中的destory-method和DisposableBean接口的定义都会在初始化阶段完成。
+
+​		DisposableBeanAdapter类里的destory方法进行销毁操作，因为销毁的方法有两种甚至多种，目前有实现接口DisposableBean、配置信息destory-method两种方式，在销毁时希望有一个统一的接口进行销毁，所以新增了适配器类，做统一处理。
+
+​		在AbstractAutowireCapableBeanFactory中，创建bean时，需要把销毁方法保存起来，方便后续执行销毁动作，就注册实现了DisposableBean接口的销毁方法的DisposableBeanAdapter类的对象，对象会被注册到DefaultSingletonBeanRegistry中disposableBeans属性中去，disposableBean对象的destory方法在类AbstractApplicationContext的close方法通过getBeanFactory().destorySingletons()进行调用，完成销毁。
+
+### 2.对象作用域和FactoryBean
+
+​		目标是，把以代理方式动态变化的对象，注册到Spring容器中。
+
+​		目标实现是，对外提供一个可以二次从FactoryBean的getObject方法中获取对象的功能，这样所有实现此接口的对象类就可以扩充自己的对象功能了。
+
+​		整个实现过程包括两部分，一是解决单例还是原型对象，二是处理FactoryBean类型对象创建过程中获取具体调用对象的getObject()操作。SCOPE_SINGLETON、SCOPE_PROTOTYPE，对象类型的创建获取方式，主要区分在于AbstractAutowireCapableBeanFactory类的createBean方法创建完成对象后是否存到内存，如果不放入则每次获取都会重新创建，另外非singleton类型的bean不需要执行销毁方法。createBean最后要判断bean对象是否是一个FactoryBean对象，如果是则继续获取FactoryBean对象中的getObject对象，在存入内存前，会调用factory.isSingleton()方法判断是否是单例类型，以决定是否放入内存。
+
+​		定义FactoryBean接口提供三个方法，获取对象、获取对象类型以及判断是否是单例对象。		
+
+​		在AbstractBeanFactory继承的DefaultSingletonBeanRegistry类中间加了一层FactoryBeanRegistrySupport类，主要是处理FactoryBean注册操作。新增的功能主要是在doGetBean方法中，添加了（T）getObjectForBeanInstance方法来判断是否是FactoryBean，如果不是直接返回，如果是，则在FactoryBean的缓存中获取对象，如果不存在则调用FactoryBeanRegistrySupport#getObjectFromFactoryBean，从FactoryBean里获取对象，先判断是否是单例，如果不是直接返回factory.getobject()，如果是单例，则判断缓存中是否有对象，有则返回，没有就调用factory.getobject()得到对象后，存入缓存，再返回。
+
+### 3.容器事件和事件监听器
+
+​		以观察者模式的方式，在Spring框架下可以定义、监听和发布自己的事件信息。使用观察者模式定义出事件类、事件监听类、事件发布类，同时还需要完成一个广播器功能，接受事件时使用isAssignableFrom判断接受者感兴趣的事件。（isAssignableFrom是用来判断子类父类和接口和实现类的关系的，A.isAssignableFrom(B)为true表明A是父类）
+
+​		ApplicationContext接口实现事件发布接口ApplicationEventPublisher，提供事件监听功能。
+
+​		定义事件抽象类ApplicationEvent继承java.util.EventObject，定义ApplicationContextEvent类继承ApplicationEvent，后续所有事件的类都需要继承这个类。ContextClosedEvent、ContextRefreshedEvent类用于监听关闭和刷新动作。
+
+​		事件广播器，定义接口ApplicationEventMulticaster，是注册监听器和发布事件的广播器，提供添加、移除监听和广播事件的方法。定义抽象类ApplicationEventMulticaster，是对事件广播器的公用方法提取，在这个类中实现一些基本功能，避免所有直接实现接口还需要处理细节。getApplicationListeners方法主要是摘取符合广播事件中的监听处理器，具体过滤动作在supportsEvent方法中。
+
+​		事件发布者的定义和实现，ApplicationEventPublisher是一个事件发布接口，所有事件都需要从这个接口发布出去，在AbstractApplicationContext#refresh中，新增了初始化事件发布者、注册事件监听器、发布容器刷新完成事件。
+
+​		初始化事件发布者initApplicationEventMulticaster()，主要实例化了一个SimpleApplicationEventMulticaster，这是一个事件广播器。
+
+​		注册事件监听器registerListeners()，通过getBeansOfType方法获取spring.xml中的监听器。
+
+​		发布容器刷新完成事件finishRefresh()，发布了第一个服务器启动完成后的事件，这个事件通过pubglishEvent发布出去。
+
+​		最后是在close方法中，新增了发布一个容器关闭事件publishEvent(new ContextClosedEvent(this))。
+
+
+
+**扩展就是Spring已经写好了调接口的方法做相关处理，你只要实现接口，重写相应方法就好了。**
+
+## 2.AOP
+
+​		AOP的核心技术主要是动态代理，就像一个接口的实现类，使用代理的方式替换掉这个实现类，使用代理类来实现你的逻辑。只不过AOP不是代理类而是代理方法。AOP包括业务需求和系统需求，它们通过连接点、切面（切点、横切逻辑（advice））、织入器联系在一起。
+
+### 		1.目标：1.给符合规则的方法做代理。2.做完代理方法的案例后，把类的职责拆分出来。
+
+​		首先实现一个可以代理方法的proxy，其实代理方法主要使用到方法拦截器类处理方法的调用MethodInterceptor#invoke。此外，再使用org.aspectj.weaver.tools.PointcutParser处理拦截表达式“execution(*cn.springframework.test.bean.IUserService.*(..))”有了方法代理和处理拦截就有了一个AOP的雏形了。AopProxy是代理的抽象对象，它的实现主要是基于JDK的代理和CGLIB的代理。
+
+​		定义切点接口，用于获取ClassFilter、MethodMatcher对象。
+
+​		定义ClassFilter接口，用于切点找到给定的接口和目标类。
+
+​		定义MethodMatcher接口，找到表达式范围内匹配的目标类和方法
+
+​		实现切点表达式类AspectJExpressionPointcut，依赖于aspectj组件，实现了接口Pointcut、ClassFilter、MethodMatcher，专门用于处理类和方法的匹配过滤操作。匹配操作是通过aspectj组件的PointcutExpression类的couldMatchJoinPointsInType()和matchesMethodExecution()方法实现。
+
+​		AdvisedSupport类，主要用于把代理拦截匹配的各项属性包装到一个类中，方便在Proxy实现类进行使用。
+
+​		TargetSource类是被代理的目标对象，在目标对象类中提供Object入参属性，以及获取目标类TargetClass信息。
+
+​		MethodInterceptor接口是一个拦截方法器接口，由用户自己实现invoke调用方法。
+
+​		MethodMatcher接口是一个匹配方法接口，检查目标方法是否符合通知条件，这个接口对象由AspectJExpressionPointcut提供服务。
+
+​		AopProxy接口，定义一个标准接口，用于获取代理类，因为有两种实现代理的方式，定义接口方便管理实现类。
+
+​		JdkDynamicAopProxy类，基于JDK实现的代理类，分别实现接口AopProxy、InvocationHandler的方法获取代理对象getProxy和反射调用invoke。invoke方法中入参方法method匹配后，通过反射调用methodInterceptor.invoke()，使用用户提供的方法拦截。
+
+​		CglibAopProxy类，基于Cglib使用Enhancer代理的类，可以在运行期间为接口使用底层ASM字节码增强技术处理对象的代理对象生成，因此被代理类不需要实现任何接口。扩展进去的用户代理方法，主要是在Enhance#setCallback中处理用户自己的新增的拦截处理。
+
+### 		2.目标：1.借BeanPostProcessor把动态代理融入到Bean的生命周期中，2.如何组装各项切点、拦截、前置的功能和适配对应的代理。
+
+​		因为创建的是代理对象，所以需要前置于其他对象的创建，在AbstractAutowireCapableBeanFactory#createBean要先判断bean对象是否需要代理，有则直接返回代理对象。
+
+​		InstantiationAwareBeanPostProcessor接口继承了BeanPostProcessor接口。
+
+​		定义Advice拦截器链，Spring AOP把advice分为了BeforeAdvice、AfterAdvice、AfterReturningAdvice和ThrowsAdvice，就像一个链路。定义BeforeAdvice接口。定义MethodBeforeAdvice接口，继承BeforeAdvice接口。在Spring框架中，Advice是通过方法拦截器MethodInterceptor实现的。
+
+​		定义访问者Advisor接口，定义PointAdvisor接口继承Advisor接口。Advisor（切面）承担了Pointcut（切点）和Advice（横切逻辑）的组合，Pointcut用于获取JoinPoint，Advice决定JoinPoint执行什么操作。
+
+​		AspectJExpressionPointcutAdvisor类实现PointcutAdvisor接口，把切点pointcut，拦截方法advice和具体的拦截表达式包装在一起，这样就可以在xml中定义一个切面拦截器。
+
+​		MethodBeforeAdviceInterceptor类实现了MthodInterceptor接口，是方法拦截器，在invoke方法中调用MethodBeforeAdvice接口的before方法进行拦截，这个方法是用户实现接口后实现的。
+
+​		proxyFactory类是代理工厂，从JDK和CGLIB中选择一种代理。
+
+​		DefaultAdvisorAutoProxyCreator类实现了InstantiationAwareBeanPostProcessor、BeanFactoryAware接口，是处理整个AOP代理融入到Bean的生命周期的核心类，它依赖于拦截器、代理工厂和Pointcut与Advisor的包装服务AspectJExpressionPointcutAdvisor，由它提供切面、拦截方法和表达式。这个类的核心方法是postProcessBeforeInstantiation，通过beanFactory.getBeansOfType获取AspectJExpressionPointcutAdvisor类对象advisors，在进行遍历填充对应的属性，包括：目标对象、拦截方法、匹配器，之后返回代理对象。现在调用方获取到的Bean对象是一个已经被切面注入的对象，当调用方法的时候则会被按需拦截，处理用户需要的信息。
+
+## 3.解决循环依赖
